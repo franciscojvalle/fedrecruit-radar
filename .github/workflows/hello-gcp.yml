@@ -1,0 +1,31 @@
+name: hello-gcp
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/hello-gcp.yml"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/1064329142943/locations/global/workloadIdentityPools/github/providers/github-oidc
+          service_account: github-actions@fedrecruit-radar.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Can we see the bucket?
+        run: gcloud storage ls gs://fedrecruit-raw/ && echo "bucket OK"
+
+      - name: Can we query BigQuery?
+        run: bq query --use_legacy_sql=false --project_id=fedrecruit-radar 'SELECT "bigquery OK" AS status'
