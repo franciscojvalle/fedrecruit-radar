@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - id: auth
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: projects/1064329142943/locations/global/workloadIdentityPools/github/providers/github-oidc
           service_account: github-actions@fedrecruit-radar.iam.gserviceaccount.com
