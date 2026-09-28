@@ -216,3 +216,22 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- FedRecruit Radar: never commit data or credentials ---
+data/
+*.parquet
+*.duckdb
+*.csv
+*.xlsx
+.env
+.env.*
+*.json.key
+*-key.json
+credentials*.json
+service-account*.json
+gha-creds-*.json
+
+
+
+
+
