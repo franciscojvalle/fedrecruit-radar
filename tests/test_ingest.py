@@ -150,6 +150,53 @@ def test_fetch_transactions_uses_transaction_endpoint():
     assert "Mod" in session.bodies[0]["fields"]
 
 
+def test_fetch_transactions_splits_date_range_instead_of_paging():
+    """A range that doesn't fit in one page is split in half; no page 2 is ever requested."""
+    session = FakeSession([
+        FakeResponse(200, {"results": TX_FIXTURE[:1], "page_metadata": {"hasNext": True}}),   # full range: too big
+        FakeResponse(200, {"results": TX_FIXTURE[:2], "page_metadata": {"hasNext": False}}),  # left half
+        FakeResponse(200, {"results": TX_FIXTURE[2:], "page_metadata": {"hasNext": False}}),  # right half
+    ])
+    out = us.fetch_transactions(us.AwardSearch("2026-01-01", "2026-01-10"), session=session)
+    assert len(out) == 4
+    periods = [b["filters"]["time_period"][0] for b in session.bodies]
+    assert periods[1] == {"start_date": "2026-01-01", "end_date": "2026-01-05"}
+    assert periods[2] == {"start_date": "2026-01-06", "end_date": "2026-01-10"}
+    assert all(b["page"] == 1 for b in session.bodies)
+
+
+def test_fetch_transactions_pages_through_a_single_busy_day():
+    session = FakeSession([
+        FakeResponse(200, {"results": TX_FIXTURE[:2], "page_metadata": {"hasNext": True}}),  # probe
+        FakeResponse(200, {"results": TX_FIXTURE[:2], "page_metadata": {"hasNext": True}}),  # page 1
+        FakeResponse(200, {"results": TX_FIXTURE[2:], "page_metadata": {"hasNext": False}}), # page 2
+    ])
+    out = us.fetch_transactions(us.AwardSearch("2026-01-01", "2026-01-01"), session=session)
+    assert len(out) == 4
+
+
+def test_fetch_complete_drops_exact_duplicates():
+    rows = TX_FIXTURE + [TX_FIXTURE[1]]  # same record returned twice by the API
+    df = ing.fetch_complete(lambda: rows, us.to_tx_frame, ["award_key", "modification_number"], 4, "tx")
+    assert len(df) == 4
+
+
+def test_fetch_complete_retries_until_count_matches():
+    pulls = iter([TX_FIXTURE[:3] + [TX_FIXTURE[1]],   # one duplicated, one missing
+                  TX_FIXTURE])                        # clean
+    df = ing.fetch_complete(lambda: next(pulls), us.to_tx_frame,
+                            ["award_key", "modification_number"], 4, "tx")
+    assert len(df) == 4
+
+
+def test_fetch_complete_keeps_conflicting_duplicates_for_validation():
+    changed = dict(TX_FIXTURE[1], **{"Transaction Amount": 1.0})  # same key, different content
+    df = ing.fetch_complete(lambda: TX_FIXTURE + [changed], us.to_tx_frame,
+                            ["award_key", "modification_number"], 4, "tx")
+    with pytest.raises(ing.ValidationError):
+        ing.validate_transactions(df, us.to_frame(FIXTURE), expected=4)
+
+
 def test_expected_count_reads_contracts():
     session = FakeSession([FakeResponse(200, {"results": {"contracts": 715, "grants": 0}})])
     assert us.expected_count(us.AwardSearch("a", "b"), "transactions", session=session) == 715

@@ -98,6 +98,32 @@ def validate_transactions(tx: pd.DataFrame, awards: pd.DataFrame, expected: int 
         raise ValidationError(f"{orphans.sum()} transactions belong to awards not in the awards pull.")
 
 
+# --- Complete pulls --------------------------------------------------------------------
+
+FETCH_ATTEMPTS = int(os.environ.get("FETCH_ATTEMPTS", "3"))
+
+
+def fetch_complete(fetch, to_df, key: list[str], expected: int, label: str) -> pd.DataFrame:
+    """Pull until the result matches the API's own count, up to FETCH_ATTEMPTS times.
+
+    Exact duplicate rows (the same record returned twice by an unstable page order) are
+    dropped. Rows that share a key but differ in content are NOT dropped: validation
+    rejects them, because that would be a real data problem, not a paging glitch.
+    If every attempt comes up short, the last pull is returned and validation stops the run.
+    """
+    df = pd.DataFrame()
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        raw = to_df(fetch())
+        df = raw.drop_duplicates(ignore_index=True)
+        if len(raw) != len(df):
+            log.warning("%s: dropped %d exact duplicate rows", label, len(raw) - len(df))
+        if len(df) == expected and not df.duplicated(subset=key).any():
+            return df
+        log.warning("%s attempt %d/%d: %d unique rows, API count %d; pulling again",
+                    label, attempt, FETCH_ATTEMPTS, len(df), expected)
+    return df
+
+
 # --- Writers ----------------------------------------------------------------------
 
 def write_local(df: pd.DataFrame, snapshot: dt.date, name: str = "awards", root: Path = Path("data")) -> Path:
@@ -199,14 +225,18 @@ def run(today: dt.date, local_only: bool) -> None:
     search = AwardSearch(start_date=start, end_date=end)
     log.info("Window: activity between %s and %s", start, end)
 
-    awards = to_frame(fetch_awards(search))
+    n_awards = expected_count(search, "awards")
+    n_tx = expected_count(search, "transactions")
+    awards = fetch_complete(lambda: fetch_awards(search), to_frame, ["award_key"], n_awards, "awards")
+    tx = fetch_complete(lambda: fetch_transactions(search), to_tx_frame,
+                        ["award_key", "modification_number"], n_tx, "transactions")
     awards.insert(0, "snapshot_date", today)
-    tx = to_tx_frame(fetch_transactions(search))
     tx.insert(0, "snapshot_date", today)
-    log.info("Fetched %d awards and %d transactions", len(awards), len(tx))
+    log.info("Fetched %d awards (API count %d) and %d transactions (API count %d)",
+             len(awards), n_awards, len(tx), n_tx)
 
-    validate(awards, expected_count(search, "awards"))
-    validate_transactions(tx, awards, expected_count(search, "transactions"))
+    validate(awards, n_awards)
+    validate_transactions(tx, awards, n_tx)
     log.info("Validation passed")
 
     paths = {"awards": write_local(awards, today, "awards"),

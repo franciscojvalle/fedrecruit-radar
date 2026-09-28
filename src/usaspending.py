@@ -9,8 +9,9 @@ Endpoints used (no API key required, docs: https://api.usaspending.gov/docs/endp
 
 from __future__ import annotations
 
+import datetime as dt
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Iterable
 
 import pandas as pd
@@ -165,8 +166,8 @@ class AwardSearch:
         return {
             "filters": self.filters(),
             "fields": TX_FIELDS,
-            "sort": "Transaction Amount",
-            "order": "desc",
+            "sort": "Action Date",
+            "order": "asc",
             "limit": self.page_size,
             "page": page,
         }
@@ -210,8 +211,32 @@ def fetch_awards(search: AwardSearch, session=None) -> list[dict]:
 
 
 def fetch_transactions(search: AwardSearch, session=None) -> list[dict]:
-    """Return every contract action (modification) matching the search, following pagination."""
-    return _fetch_pages(TRANSACTIONS_URL, search.tx_body, search.max_pages, session or requests.Session())
+    """Return every contract action (modification) matching the search.
+
+    The API's sort is not stable when values tie, so paging through a large result can
+    return one row twice and skip another. Instead, the date range is split in half until
+    each slice fits in a single page. A transaction has exactly one action date, so the
+    slices never overlap and no paging order is involved.
+    """
+    return _fetch_tx_range(search, session or requests.Session())
+
+
+def _fetch_tx_range(search: AwardSearch, session) -> list[dict]:
+    payload = _post_with_retry(session, search.tx_body(1), url=TRANSACTIONS_URL)
+    results = payload.get("results") or []
+    if not (payload.get("page_metadata") or {}).get("hasNext"):
+        return results
+
+    start = dt.date.fromisoformat(search.start_date)
+    end = dt.date.fromisoformat(search.end_date)
+    if start >= end:
+        # One day with more than a page of actions: nothing left to split, so page through it.
+        return _fetch_pages(TRANSACTIONS_URL, search.tx_body, search.max_pages, session)
+
+    mid = start + (end - start) // 2
+    left = replace(search, start_date=start.isoformat(), end_date=mid.isoformat())
+    right = replace(search, start_date=(mid + dt.timedelta(days=1)).isoformat(), end_date=end.isoformat())
+    return _fetch_tx_range(left, session) + _fetch_tx_range(right, session)
 
 
 def expected_count(search: AwardSearch, kind: str, session=None) -> int:
