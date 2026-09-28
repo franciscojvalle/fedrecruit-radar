@@ -8,7 +8,9 @@ import pytest
 from src import ingest_usaspending as ing
 from src import usaspending as us
 
-FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "spending_by_award_sample.json").read_text())
+FIXTURES = Path(__file__).parent / "fixtures"
+FIXTURE = json.loads((FIXTURES / "spending_by_award_sample.json").read_text())
+TX_FIXTURE = json.loads((FIXTURES / "spending_by_transaction_sample.json").read_text())
 
 
 class FakeResponse:
@@ -130,11 +132,93 @@ def test_validate_accepts_normal_pull():
     ing.validate(_frame(280))
 
 
-def test_local_only_run_writes_parquet(tmp_path, monkeypatch):
+def test_validate_rejects_incomplete_pull():
+    with pytest.raises(ing.ValidationError, match="incomplete"):
+        ing.validate(_frame(60), expected=61)
+
+
+# --- Transactions -------------------------------------------------------------------
+
+def test_fetch_transactions_uses_transaction_endpoint():
+    session = FakeSession([FakeResponse(200, {"results": TX_FIXTURE, "page_metadata": {"hasNext": False}})])
+    session_urls = []
+    orig_post = session.post
+    session.post = lambda url, json=None, timeout=None: (session_urls.append(url), orig_post(url, json, timeout))[1]
+    out = us.fetch_transactions(us.AwardSearch("2021-10-01", "2026-09-24"), session=session)
+    assert len(out) == 4
+    assert session_urls == [us.TRANSACTIONS_URL]
+    assert "Mod" in session.bodies[0]["fields"]
+
+
+def test_expected_count_reads_contracts():
+    session = FakeSession([FakeResponse(200, {"results": {"contracts": 715, "grants": 0}})])
+    assert us.expected_count(us.AwardSearch("a", "b"), "transactions", session=session) == 715
+    assert set(session.bodies[0]) == {"filters"}
+
+
+def test_to_tx_frame_flattens_and_types():
+    tx = us.to_tx_frame(TX_FIXTURE)
+    assert list(tx.columns) == us.TX_COLUMNS
+    assert tx["obligation_amount"].dtype == "float64"
+    assert tx.iloc[1]["modification_number"] == "P00001"
+    assert tx.iloc[1]["action_date"] == dt.date(2026, 5, 1)
+    assert pd.isna(tx.iloc[0]["action_type"])          # base award has no action type
+    assert tx.iloc[3]["obligation_amount"] == -1000    # de-obligations are kept, negative
+    assert pd.isna(tx.iloc[3]["psc_code"])
+    assert "internal_id" not in tx.columns
+
+
+def _awards_and_tx():
+    return us.to_frame(FIXTURE), us.to_tx_frame(TX_FIXTURE)
+
+
+def test_validate_transactions_accepts_good_pull():
+    awards, tx = _awards_and_tx()
+    ing.validate_transactions(tx, awards, expected=4)
+
+
+def test_validate_transactions_rejects_incomplete_pull():
+    awards, tx = _awards_and_tx()
+    with pytest.raises(ing.ValidationError, match="incomplete"):
+        ing.validate_transactions(tx, awards, expected=5)
+
+
+def test_validate_transactions_rejects_duplicate_mod():
+    awards, tx = _awards_and_tx()
+    tx = pd.concat([tx, tx.iloc[[1]]], ignore_index=True)
+    with pytest.raises(ing.ValidationError, match="duplicate"):
+        ing.validate_transactions(tx, awards)
+
+
+def test_validate_transactions_rejects_orphans():
+    awards, tx = _awards_and_tx()
+    with pytest.raises(ing.ValidationError, match="not in the awards pull"):
+        ing.validate_transactions(tx, awards.iloc[:1])
+
+
+# --- End to end (local) -----------------------------------------------------------------
+
+def test_local_only_run_writes_both_files(tmp_path, monkeypatch):
     records = [dict(FIXTURE[0], generated_internal_id=f"K{i}") for i in range(60)]
+    tx_records = [dict(TX_FIXTURE[0], generated_internal_id=f"K{i}") for i in range(60)]
     monkeypatch.setattr(ing, "fetch_awards", lambda search: records)
+    monkeypatch.setattr(ing, "fetch_transactions", lambda search: tx_records)
+    monkeypatch.setattr(ing, "expected_count", lambda search, kind: 60)
     monkeypatch.chdir(tmp_path)
     ing.run(dt.date(2026, 9, 24), local_only=True)
-    out = tmp_path / "data/raw/usaspending/snapshot_date=2026-09-24/awards.parquet"
-    df = pd.read_parquet(out)
-    assert len(df) == 60 and df.columns[0] == "snapshot_date"
+    folder = tmp_path / "data/raw/usaspending/snapshot_date=2026-09-24"
+    awards = pd.read_parquet(folder / "awards.parquet")
+    tx = pd.read_parquet(folder / "transactions.parquet")
+    assert len(awards) == 60 and awards.columns[0] == "snapshot_date"
+    assert len(tx) == 60 and tx.columns[0] == "snapshot_date"
+
+
+def test_nothing_written_when_transactions_fail(tmp_path, monkeypatch):
+    records = [dict(FIXTURE[0], generated_internal_id=f"K{i}") for i in range(60)]
+    monkeypatch.setattr(ing, "fetch_awards", lambda search: records)
+    monkeypatch.setattr(ing, "fetch_transactions", lambda search: TX_FIXTURE)  # orphans
+    monkeypatch.setattr(ing, "expected_count", lambda search, kind: 60 if kind == "awards" else 4)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ing.ValidationError):
+        ing.run(dt.date(2026, 9, 24), local_only=True)
+    assert not (tmp_path / "data").exists()
