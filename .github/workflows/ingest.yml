@@ -1,0 +1,53 @@
+name: ingest
+
+# Manual for now (Phase 2). The daily schedule and failure alert are added in Phase 4.
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Snapshot date YYYY-MM-DD (blank = today UTC)"
+        required: false
+
+permissions:
+  contents: read
+  id-token: write   # lets the job request a GitHub OIDC token for Workload Identity
+
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GCP_PROJECT: fedrecruit-radar
+      GCS_BUCKET: fedrecruit-raw
+      BQ_DATASET: fedrecruit
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/1064329142943/locations/global/workloadIdentityPools/github/providers/github-oidc
+          service_account: github-actions@fedrecruit-radar.iam.gserviceaccount.com
+          create_credentials_file: true
+
+      - name: Ingest USAspending
+        env:
+          SNAPSHOT_DATE: ${{ inputs.date }}   # passed as env, never interpolated into the script
+        run: |
+          if [ -n "$SNAPSHOT_DATE" ]; then
+            [[ "$SNAPSHOT_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "bad date"; exit 1; }
+            python -m src.ingest_usaspending --date "$SNAPSHOT_DATE"
+          else
+            python -m src.ingest_usaspending
+          fi
