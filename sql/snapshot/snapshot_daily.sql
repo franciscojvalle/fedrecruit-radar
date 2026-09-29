@@ -41,6 +41,6 @@ SELECT
   award_amount,
   end_date,
   status,
-  successor_award_key,
+  CAST(NULL AS STRING) AS successor_award_key,   -- reserved for v2 successor matching
   FALSE AS reconstructed
 FROM {{ table('fact_awards') }};

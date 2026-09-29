@@ -80,16 +80,24 @@ First match wins; default `staffing`.
 
 ## 7. Recompete status (`int_recompete_flags`)
 
-- **Successor:** a newer niche award, same sub-agency, same subtype, awarded within 90 days either
-  side of the old end date. The earliest one wins.
-- **Status**, first match wins: `recompeted` → `expired_no_successor` (ended >90 days ago) →
-  `expired_pending` (ended ≤90 days ago) → `expiring_6m` → `expiring_12m` → `active`.
+Status follows the **end date only**, first match wins:
+`expired` (end date passed) → `expiring_6m` → `expiring_12m` → `active`.
 
-Example: `HQ003425CE025`, Heidrick & Struggles / WHS, $15.1M, ended 2026-09-17 → `expired_pending`.
-It becomes `expired_no_successor` after 2026-12-16 unless a successor appears.
+Example: `HQ003425CE025`, Heidrick & Struggles / WHS, $15.1M, ended 2026-09-17 → `expired`.
 
-Known limit (Definitions, open item C): DFC places many small staffing orders at one sub-agency, so
-an unrelated order can look like a successor. To be checked against 10 known recompetes.
+**Why no successor matching (decision 2026-09-29).** The first version marked an award
+"recompeted" when a newer niche award appeared at the same office, same subtype, within 90 days
+of its end date. A hand check of 10 such pairs found 2 right, 2 doubtful and 6 wrong:
+
+| Old award | Picked as replacement | Problem |
+|---|---|---|
+| CDC clerical assistant, $82K | CFA planning and administration support, $3.0M | different work |
+| DFC full-time KYC analyst, ends Dec 2026 | "OCCS staffing", started Sep 2026 | different role, **and it hid a live lead** |
+| Army Work for Warriors outreach, $996K | Work for Warriors outreach, $1.0M | correct |
+
+A missed lead costs a user more than an extra one to skip, so the list follows end dates.
+Right pairs always had similar descriptions; won/lost analysis comes back in v2 with description
+matching and review.
 
 ## 8. Money
 

@@ -30,12 +30,6 @@ SELECT
   status IN ('expiring_6m', 'expiring_12m')                           AS in_recompete_window,
   status = 'expiring_6m'                                              AS in_act_now_window,
   end_date >= as_of_date                                              AS is_active,
-  successor_award_key,
-  successor_award_id,
-  successor_recipient_uei,
-  successor_recipient_name,
-  successor_award_date,
-  incumbent_changed,
   CONCAT('https://www.usaspending.gov/award/', award_key)             AS usaspending_url,
   last_modified_date,
   as_of_date

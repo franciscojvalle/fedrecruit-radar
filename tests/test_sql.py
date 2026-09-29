@@ -138,16 +138,17 @@ def test_subtypes(db):
     assert n["A9"]["subtype"] == "staffing"
 
 
-def test_statuses_and_successor(db):
+def test_statuses_by_end_date_only(db):
     f = by_key(db, "fact_awards")
     assert set(f) == {"A1", "A2", "A3", "A4", "A7", "A8", "A9", "A10", "A11"}
     assert f["A1"]["status"] == "expiring_12m"
     assert f["A7"]["status"] == "expiring_6m" and f["A7"]["in_act_now_window"]
-    assert f["A2"]["status"] == "expired_pending"
-    assert f["A3"]["status"] == "recompeted"
-    assert f["A3"]["successor_award_key"] == "A4" and f["A3"]["incumbent_changed"]
+    assert f["A2"]["status"] == "expired"
+    # A newer award at the same office does NOT hide A3: status follows end dates only.
+    assert f["A3"]["status"] == "expired"
     assert f["A4"]["status"] == "active"
-    assert f["A8"]["status"] == "expired_no_successor"
+    assert f["A8"]["status"] == "expired"
+    assert "successor_award_key" not in f["A3"]
     assert f["A9"]["is_masked_recipient"] and f["A9"]["is_zero_amount"]
 
 
@@ -177,8 +178,7 @@ def test_obligations(db):
 
 def test_vendors(db):
     v = by_key(db, "dim_vendors", key="recipient_uei")
-    assert v["UEI00000000A"]["recompetes_lost"] == 1
-    assert v["UEI00000000B"]["recompetes_won"] == 1
+    assert v["UEI00000000A"]["niche_awards"] == 1
     assert sum(x["share_24m"] or 0 for x in v.values()) == pytest.approx(1.0)
     assert v["UEI000000009"]["is_masked_recipient"]
 
