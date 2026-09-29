@@ -81,6 +81,25 @@ TRANSACTIONS = [
 ]
 
 
+def detail(key, end, potential, set_aside=None, offers=None, ceiling=None):
+    return dict(snapshot_date=AS_OF, award_key=key, current_end_date=end, potential_end_date=potential,
+                obligated_amount=100000.0, base_exercised_options_value=100000.0,
+                base_and_all_options_value=ceiling, type_set_aside=None,
+                type_set_aside_description=set_aside, extent_competed_description=None,
+                number_of_offers_received=offers, solicitation_identifier=None)
+
+
+# Detail pages exist only for still-running awards (end date >= snapshot date), as in the ingest.
+DETAILS = [
+    detail("A1", D(2027, 6, 30), D(2029, 6, 30), set_aside="8A COMPETED", offers=6, ceiling=300000.0),  # options left
+    detail("A7", D(2026, 11, 30), D(2026, 11, 30), set_aside="SMALL BUSINESS SET ASIDE - TOTAL"),       # none left
+    detail("A4", D(2028, 1, 31), D(2030, 1, 31)),
+    detail("A9", D(2027, 6, 30), D(2027, 7, 15)),     # 15 days of slack: not a real option
+    detail("A10", D(2027, 6, 30), D(2027, 6, 30)),
+    detail("A11", D(2027, 6, 30), D(2027, 6, 30)),
+]
+
+
 def to_duckdb(sql: str) -> str:
     sql = sql.replace("`p.d.", "").replace("`", "")
     return sqlglot.transpile(sql, read="bigquery", write="duckdb")[0]
@@ -90,8 +109,12 @@ def build_db():
     import pandas as pd
 
     con = duckdb.connect()
-    for name, rows in (("raw_awards", AWARDS), ("raw_transactions", TRANSACTIONS)):
+    for name, rows in (("raw_awards", AWARDS), ("raw_transactions", TRANSACTIONS), ("raw_award_details", DETAILS)):
         df = pd.DataFrame(rows)  # noqa: F841  (DuckDB reads the local variable)
+        # Give all-empty text columns a text type (BigQuery has them as STRING).
+        for col in df.columns:
+            if df[col].isna().all():
+                df[col] = df[col].astype("string")
         con.execute(f"CREATE TABLE {name} AS SELECT * FROM df")
     for path in r.MODELS:
         select = to_duckdb(r.render(r.read_sql(path), scratch=False, project="p", dataset="d"))
@@ -165,6 +188,20 @@ def test_recompetes_list(db):
     rc = by_key(db, "recompetes")
     assert set(rc) == {"A1", "A7", "A9", "A10", "A11"}
     assert all(row["notice_out"] == "unknown" for row in rc.values())
+
+
+def test_recompete_type_from_options(db):
+    rc = by_key(db, "recompetes")
+    assert rc["A1"]["recompete_type"] == "option_decision"      # can run to 2029
+    assert rc["A1"]["ceiling_value"] == 300000.0 and rc["A1"]["number_of_offers_received"] == 6
+    assert rc["A7"]["recompete_type"] == "likely_recompete"     # recruiting, no options left
+    assert rc["A9"]["recompete_type"] == "likely_recompete"     # 15 days of slack is not an option
+    assert rc["A10"]["recompete_type"] == "one_off_search"      # executive search, no options left
+    assert rc["A7"]["set_aside"] == "SMALL BUSINESS SET ASIDE - TOTAL"
+    assert rc["A10"]["set_aside"] == "NOT REPORTED"
+    f = by_key(db, "fact_awards")
+    assert f["A4"]["recompete_type"] is None                    # not in the window
+    assert f["A4"]["has_options_remaining"]
 
 
 def test_obligations(db):

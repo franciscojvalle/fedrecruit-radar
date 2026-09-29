@@ -11,6 +11,7 @@ from src import usaspending as us
 FIXTURES = Path(__file__).parent / "fixtures"
 FIXTURE = json.loads((FIXTURES / "spending_by_award_sample.json").read_text())
 TX_FIXTURE = json.loads((FIXTURES / "spending_by_transaction_sample.json").read_text())
+DETAIL_FIXTURE = json.loads((FIXTURES / "award_detail_sample.json").read_text())
 
 
 class FakeResponse:
@@ -243,6 +244,55 @@ def test_validate_transactions_rejects_orphans():
         ing.validate_transactions(tx, awards.iloc[:1])
 
 
+# --- Award details ----------------------------------------------------------------------
+
+def fake_details(keys):
+    return us.to_detail_frame(us.to_detail_row(k, DETAIL_FIXTURE) for k in keys)
+
+
+def test_fetch_award_detail_uses_get():
+    class GetSession:
+        def __init__(self):
+            self.urls = []
+
+        def get(self, url, timeout=None):
+            self.urls.append(url)
+            return FakeResponse(200, DETAIL_FIXTURE)
+
+    session = GetSession()
+    out = us.fetch_award_detail("CONT_AWD_X", session=session)
+    assert session.urls == ["https://api.usaspending.gov/api/v2/awards/CONT_AWD_X/"]
+    assert out["piid"] == "W912LA24P0011"
+
+
+def test_detail_row_flattens_options_and_set_aside():
+    df = fake_details(["K1"])
+    row = df.iloc[0]
+    assert row["current_end_date"] == dt.date(2026, 10, 30)
+    assert row["potential_end_date"] == dt.date(2029, 10, 30)
+    assert row["base_and_all_options_value"] == 6823956
+    assert row["type_set_aside_description"] == "8A COMPETED"
+    assert row["number_of_offers_received"] == 6
+
+
+def test_detail_row_handles_missing_sections():
+    df = us.to_detail_frame([us.to_detail_row("K1", {})])
+    assert pd.isna(df.iloc[0]["potential_end_date"]) and pd.isna(df.iloc[0]["number_of_offers_received"])
+
+
+def test_validate_details_requires_every_running_award():
+    df = fake_details(["K1"])
+    ing.validate_details(df, ["K1"])
+    with pytest.raises(ing.ValidationError, match="no detail row"):
+        ing.validate_details(df, ["K1", "K2"])
+
+
+def test_validate_details_requires_potential_end_date():
+    df = us.to_detail_frame([us.to_detail_row("K1", {})])
+    with pytest.raises(ing.ValidationError, match="potential end date"):
+        ing.validate_details(df, ["K1"])
+
+
 # --- End to end (local) -----------------------------------------------------------------
 
 def test_local_only_run_writes_both_files(tmp_path, monkeypatch):
@@ -251,6 +301,7 @@ def test_local_only_run_writes_both_files(tmp_path, monkeypatch):
     monkeypatch.setattr(ing, "fetch_awards", lambda search: records)
     monkeypatch.setattr(ing, "fetch_transactions", lambda search: tx_records)
     monkeypatch.setattr(ing, "expected_count", lambda search, kind: 60)
+    monkeypatch.setattr(ing, "fetch_details", fake_details)
     monkeypatch.chdir(tmp_path)
     ing.run(dt.date(2026, 9, 24), local_only=True)
     folder = tmp_path / "data/raw/usaspending/snapshot_date=2026-09-24"
@@ -258,6 +309,8 @@ def test_local_only_run_writes_both_files(tmp_path, monkeypatch):
     tx = pd.read_parquet(folder / "transactions.parquet")
     assert len(awards) == 60 and awards.columns[0] == "snapshot_date"
     assert len(tx) == 60 and tx.columns[0] == "snapshot_date"
+    details = pd.read_parquet(folder / "award_details.parquet")
+    assert len(details) == 60   # every fixture award ends in 2027, so all are still running
 
 
 def test_nothing_written_when_transactions_fail(tmp_path, monkeypatch):

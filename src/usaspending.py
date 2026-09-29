@@ -5,6 +5,7 @@ Endpoints used (no API key required, docs: https://api.usaspending.gov/docs/endp
   POST /api/v2/search/spending_by_transaction/        one row per contract action (modification)
   POST /api/v2/search/spending_by_award_count/        expected row counts, used to prove a pull is complete
   POST /api/v2/search/spending_by_transaction_count/
+  GET  /api/v2/awards/<award_key>/                    one award's detail page: options, set-aside, bids
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ AWARDS_URL = f"{BASE_URL}/spending_by_award/"
 TRANSACTIONS_URL = f"{BASE_URL}/spending_by_transaction/"
 AWARDS_COUNT_URL = f"{BASE_URL}/spending_by_award_count/"
 TRANSACTIONS_COUNT_URL = f"{BASE_URL}/spending_by_transaction_count/"
+AWARD_DETAIL_URL = "https://api.usaspending.gov/api/v2/awards/{}/"
 API_URL = AWARDS_URL  # backwards-compatible alias
 
 # Contract award types: A = BPA call, B = purchase order, C = delivery order, D = definitive contract.
@@ -175,11 +177,20 @@ class AwardSearch:
 
 def _post_with_retry(session, body: dict, url: str = AWARDS_URL, retries: int = 4, timeout: int = 90) -> dict:
     """POST once, retrying on network errors, 429 and 5xx with exponential backoff."""
+    return _request_with_retry(lambda: session.post(url, json=body, timeout=timeout), retries)
+
+
+def _get_with_retry(session, url: str, retries: int = 4, timeout: int = 90) -> dict:
+    """GET once, with the same retry rules as POST."""
+    return _request_with_retry(lambda: session.get(url, timeout=timeout), retries)
+
+
+def _request_with_retry(send: Callable[[], "requests.Response"], retries: int) -> dict:
     delay = 5.0
     last_err: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            resp = session.post(url, json=body, timeout=timeout)
+            resp = send()
             if resp.status_code == 200:
                 return resp.json()
             if resp.status_code == 429 or resp.status_code >= 500:
@@ -281,5 +292,59 @@ def to_tx_frame(records: Iterable[dict]) -> pd.DataFrame:
     df["obligation_amount"] = pd.to_numeric(df["obligation_amount"], errors="coerce").astype("float64")
     df["action_date"] = pd.to_datetime(df["action_date"], errors="coerce").dt.date
     str_cols = [c for c in TX_COLUMNS if c not in ("obligation_amount", "action_date")]
+    df[str_cols] = df[str_cols].astype("string")
+    return df
+
+
+# --- Award detail (one request per award) ------------------------------------------------
+
+DETAIL_COLUMNS = [
+    "award_key",
+    "current_end_date",
+    "potential_end_date",           # last possible end date if every option is exercised
+    "obligated_amount",
+    "base_exercised_options_value",
+    "base_and_all_options_value",   # ceiling: value if every option is exercised
+    "type_set_aside",
+    "type_set_aside_description",   # e.g. "8A COMPETED", "SMALL BUSINESS SET ASIDE - TOTAL"
+    "extent_competed_description",
+    "number_of_offers_received",
+    "solicitation_identifier",
+]
+
+
+def fetch_award_detail(award_key: str, session=None) -> dict:
+    """The award's detail page: period of performance incl. options, ceiling, set-aside, bids."""
+    return _get_with_retry(session or requests.Session(), AWARD_DETAIL_URL.format(award_key))
+
+
+def to_detail_row(award_key: str, detail: dict) -> dict:
+    pop = detail.get("period_of_performance") or {}
+    lt = detail.get("latest_transaction_contract_data") or {}
+    return {
+        "award_key": award_key,
+        "current_end_date": pop.get("end_date"),
+        "potential_end_date": pop.get("potential_end_date"),
+        "obligated_amount": detail.get("total_obligation"),
+        "base_exercised_options_value": detail.get("base_exercised_options"),
+        "base_and_all_options_value": detail.get("base_and_all_options"),
+        "type_set_aside": lt.get("type_set_aside"),
+        "type_set_aside_description": lt.get("type_set_aside_description"),
+        "extent_competed_description": lt.get("extent_competed_description"),
+        "number_of_offers_received": lt.get("number_of_offers_received"),
+        "solicitation_identifier": lt.get("solicitation_identifier"),
+    }
+
+
+def to_detail_frame(rows: Iterable[dict]) -> pd.DataFrame:
+    """Type the detail rows for the raw_award_details schema. No business rules here."""
+    df = pd.DataFrame(list(rows), columns=DETAIL_COLUMNS)
+    for col in ("current_end_date", "potential_end_date"):
+        df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+    for col in ("obligated_amount", "base_exercised_options_value", "base_and_all_options_value"):
+        df[col] = pd.to_numeric(df[col], errors="coerce").astype("float64")
+    df["number_of_offers_received"] = pd.to_numeric(df["number_of_offers_received"], errors="coerce").astype("Int64")
+    str_cols = ["award_key", "type_set_aside", "type_set_aside_description",
+                "extent_competed_description", "solicitation_identifier"]
     df[str_cols] = df[str_cols].astype("string")
     return df

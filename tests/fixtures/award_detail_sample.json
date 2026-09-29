@@ -1,0 +1,21 @@
+{
+  "generated_unique_award_id": "CONT_AWD_W912LA24P0011_9700_-NONE-_-NONE-",
+  "piid": "W912LA24P0011",
+  "total_obligation": 2729582.4,
+  "base_exercised_options": 2729582.4,
+  "base_and_all_options": 6823956,
+  "period_of_performance": {
+    "start_date": "2024-09-30",
+    "end_date": "2026-10-30",
+    "last_modified_date": "2025-09-25",
+    "potential_end_date": "2029-10-30 00:00:00"
+  },
+  "latest_transaction_contract_data": {
+    "solicitation_identifier": "W912LA24Q0024",
+    "number_of_offers_received": "6",
+    "extent_competed": "F",
+    "extent_competed_description": "COMPETED UNDER SAP",
+    "type_set_aside": "8A",
+    "type_set_aside_description": "8A COMPETED"
+  }
+}

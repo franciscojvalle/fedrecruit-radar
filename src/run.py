@@ -43,6 +43,7 @@ RECONCILE_TOLERANCE = 0.01  # 1%
 MODELS = [
     "staging/stg_awards",
     "staging/stg_transactions",
+    "staging/stg_award_details",
     "intermediate/int_niche_filter",
     "intermediate/int_recompete_flags",
     "marts/fact_awards",

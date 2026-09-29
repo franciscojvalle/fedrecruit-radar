@@ -1,8 +1,10 @@
 """Daily ingest: USAspending -> Cloud Storage (raw parquet) -> BigQuery (raw tables).
 
-Two pulls over the same niche and window:
+Three pulls over the same niche and window:
   awards        one row per contract, current state        -> raw_awards
   transactions  one row per contract action (modification) -> raw_transactions
+  details       one row per still-running contract: options,
+                ceiling, set-aside, bids (one request each) -> raw_award_details
 
 Every run pulls the full lookback window, so a run is its own backfill and re-running
 the same day is safe:
@@ -11,7 +13,7 @@ the same day is safe:
   gs://<bucket>/raw/usaspending/snapshot_date=YYYY-MM-DD/transactions.parquet
   <project>.<dataset>.raw_awards / raw_transactions, partition snapshot_date   (replaced on re-run)
 
-Nothing is written unless BOTH pulls pass validation.
+Nothing is written unless ALL pulls pass validation.
 
 Usage:
   python -m src.ingest_usaspending               # full run (needs GCP credentials)
@@ -32,8 +34,11 @@ import pandas as pd
 from src.usaspending import (
     AwardSearch,
     expected_count,
+    fetch_award_detail,
     fetch_awards,
     fetch_transactions,
+    to_detail_frame,
+    to_detail_row,
     to_frame,
     to_tx_frame,
 )
@@ -45,6 +50,7 @@ BUCKET = os.environ.get("GCS_BUCKET", "fedrecruit-raw")
 DATASET = os.environ.get("BQ_DATASET", "fedrecruit")
 RAW_TABLE = "raw_awards"
 TX_TABLE = "raw_transactions"
+DETAIL_TABLE = "raw_award_details"
 
 # Start of the lookback window: 1 Oct of the fiscal year five years back (FY2022 when run in FY2026).
 LOOKBACK_FISCAL_YEARS = int(os.environ.get("LOOKBACK_FISCAL_YEARS", "5"))
@@ -96,6 +102,27 @@ def validate_transactions(tx: pd.DataFrame, awards: pd.DataFrame, expected: int 
     orphans = ~tx["award_key"].isin(awards["award_key"])
     if orphans.any():
         raise ValidationError(f"{orphans.sum()} transactions belong to awards not in the awards pull.")
+
+
+def validate_details(details: pd.DataFrame, requested: list[str]) -> None:
+    """Details: exactly one row for every still-running award we asked about."""
+    missing = set(requested) - set(details["award_key"].dropna())
+    if missing:
+        raise ValidationError(f"{len(missing)} still-running awards have no detail row.")
+    dupes = details["award_key"].duplicated().sum()
+    if dupes:
+        raise ValidationError(f"{dupes} duplicate award_key values in details.")
+    no_end = details["potential_end_date"].isna().sum()
+    if no_end:
+        raise ValidationError(f"{no_end} details without a potential end date.")
+
+
+def fetch_details(award_keys: list[str]) -> pd.DataFrame:
+    """One detail request per award. Only still-running awards need it (~60 a day)."""
+    import requests
+
+    session = requests.Session()
+    return to_detail_frame(to_detail_row(k, fetch_award_detail(k, session)) for k in award_keys)
 
 
 # --- Complete pulls --------------------------------------------------------------------
@@ -167,6 +194,21 @@ def _schema(kind: str):
             F("last_modified_date", "TIMESTAMP"),
             F("base_obligation_date", "DATE"),
         ]
+    if kind == "award_details":
+        return [
+            F("snapshot_date", "DATE", mode="REQUIRED"),
+            F("award_key", "STRING", mode="REQUIRED"),
+            F("current_end_date", "DATE"),
+            F("potential_end_date", "DATE"),
+            F("obligated_amount", "FLOAT64"),
+            F("base_exercised_options_value", "FLOAT64"),
+            F("base_and_all_options_value", "FLOAT64"),
+            F("type_set_aside", "STRING"),
+            F("type_set_aside_description", "STRING"),
+            F("extent_competed_description", "STRING"),
+            F("number_of_offers_received", "INT64"),
+            F("solicitation_identifier", "STRING"),
+        ]
     return [
         F("snapshot_date", "DATE", mode="REQUIRED"),
         F("award_key", "STRING", mode="REQUIRED"),
@@ -190,6 +232,8 @@ TABLES = {
     "awards": (RAW_TABLE, "One row per niche award per daily snapshot, exactly as returned by USAspending."),
     "transactions": (TX_TABLE, "One row per contract action (modification) per daily snapshot; "
                                "obligation_amount can be negative (de-obligation)."),
+    "award_details": (DETAIL_TABLE, "One row per still-running award per daily snapshot, from the award "
+                                    "detail page: options (potential end date, ceiling), set-aside, bids."),
 }
 
 
@@ -237,10 +281,17 @@ def run(today: dt.date, local_only: bool) -> None:
 
     validate(awards, n_awards)
     validate_transactions(tx, awards, n_tx)
-    log.info("Validation passed")
+
+    # Missing end dates count as not running (NaT compares False).
+    running = awards.loc[pd.to_datetime(awards["end_date"]) >= pd.Timestamp(today), "award_key"].tolist()
+    details = fetch_details(running)
+    details.insert(0, "snapshot_date", today)
+    validate_details(details, running)
+    log.info("Validation passed (%d detail pages for still-running awards)", len(details))
 
     paths = {"awards": write_local(awards, today, "awards"),
-             "transactions": write_local(tx, today, "transactions")}
+             "transactions": write_local(tx, today, "transactions"),
+             "award_details": write_local(details, today, "award_details")}
     if local_only:
         log.info("Local only: wrote %s", ", ".join(str(p) for p in paths.values()))
         return

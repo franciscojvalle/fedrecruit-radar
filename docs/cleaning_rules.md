@@ -99,6 +99,27 @@ A missed lead costs a user more than an extra one to skip, so the list follows e
 Right pairs always had similar descriptions; won/lost analysis comes back in v2 with description
 matching and review.
 
+### Recompete type and set-aside (from the award detail page)
+
+For every still-running award (61 on 2026-09-29) the ingest also reads USAspending's award detail
+page, which the search API doesn't expose: the final possible end date if every option is
+exercised, the ceiling value, the set-aside, how it was competed and how many bids came in.
+
+| Field | Rule | Example |
+|---|---|---|
+| `recompete_type = option_decision` | final possible end date more than 30 days after the current end date | `W912LA24P0011`, Army Work for Warriors: current end Oct 2026, can run to Oct 2029; ceiling $6.82M vs $2.73M obligated |
+| `recompete_type = one_off_search` | no options left and subtype is executive search: done when the role is filled | `16PBGC26F0005`, PBGC executive search for a CFO: ends Feb 2027, nothing to re-bid |
+| `recompete_type = likely_recompete` | no options left and the need is ongoing: the agency has to buy again | `77344424F0066`, DFC 3 LATAM contractors, $4.67M: ends Jul 2027, no options |
+| `set_aside` | as reported; blank becomes "NOT REPORTED" | "8A COMPETED", "SMALL BUSINESS SET ASIDE - TOTAL"; 34 of 61 not reported (mostly orders under a parent contract) |
+
+Why: in a hand check of 10 listed awards, 7 still had option years. Agencies usually extend
+rather than re-bid while options remain, so those are decision points to watch, not open bids.
+Of the other 3, two were one-off executive searches (PBGC CFO, Navy provost), which end when the
+role is filled rather than being re-bid. "Likely" because an agency can also bridge, award
+directly, or stop buying.
+The 30-day slack keeps a date that differs by a few days (e.g. Navy provost search: ends Sep 29,
+potential Sep 30) from counting as an option.
+
 ## 8. Money
 
 - `award_amount` = obligated to date ("approved so far"), not the ceiling. Running contracts can grow.
