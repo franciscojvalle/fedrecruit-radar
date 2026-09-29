@@ -51,3 +51,6 @@ jobs:
           else
             python -m src.ingest_usaspending
           fi
+          
+      - name: Transform (build, test, publish)
+        run: python -m src.run
