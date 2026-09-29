@@ -237,3 +237,32 @@ def test_snapshot_is_idempotent_and_events_are_derived():
     events = {(k, e) for k, e in con.execute("SELECT award_key, event FROM vw_award_events").fetchall()}
     assert events == {("A1", "extended"), ("A1", "status_changed"), ("A7", "amount_changed"),
                       ("A2", "dropped"), ("A12", "new")}
+
+
+# BigQuery reserved keywords (GoogleSQL). DuckDB accepts some of these as names, so the local run
+# can't catch them; BigQuery rejects them ("Unexpected '.'"). Checked on every SQL file.
+BQ_RESERVED = set("""
+ALL AND ANY ARRAY AS ASC ASSERT_ROWS_MODIFIED AT BETWEEN BY CASE CAST COLLATE CONTAINS CREATE CROSS
+CUBE CURRENT DEFAULT DEFINE DESC DISTINCT ELSE END ENUM ESCAPE EXCEPT EXCLUDE EXISTS EXTRACT FALSE
+FETCH FOLLOWING FOR FROM FULL GROUP GROUPING GROUPS HASH HAVING IF IGNORE IN INNER INTERSECT INTERVAL
+INTO IS JOIN LATERAL LEFT LIKE LIMIT LOOKUP MERGE NATURAL NEW NO NOT NULL NULLS OF ON OR ORDER OUTER
+OVER PARTITION PRECEDING PROTO QUALIFY RANGE RECURSIVE RESPECT RIGHT ROLLUP ROWS SELECT SET SOME
+STRUCT TABLESAMPLE THEN TO TREAT TRUE UNBOUNDED UNION UNNEST USING WHEN WHERE WINDOW WITH WITHIN
+""".split())
+
+ALL_SQL = sorted(r.SQL_DIR.rglob("*.sql"))
+
+
+@pytest.mark.parametrize("path", ALL_SQL, ids=lambda p: str(p.relative_to(r.SQL_DIR)))
+def test_no_reserved_words_as_names(path):
+    import re
+
+    code = re.sub(r"--[^\n]*", "", path.read_text())            # drop comments
+    code = re.sub(r"'(?:[^'\\]|\\.)*'", "''", code)             # drop string literals
+    aliases = re.findall(r"\bAS\s+([A-Za-z_]\w*)\b(?!\s*\()", code, flags=re.I)
+    qualifiers = re.findall(r"\b([A-Za-z_]\w*)\.(?=[A-Za-z_*])", code)
+    # CAST(x AS <type>) is not an alias.
+    # CREATE ... AS SELECT / AS WITH starts a query body, not an alias.
+    types = {"STRING", "DATE", "INT64", "FLOAT64", "NUMERIC", "BOOL", "TIMESTAMP", "DATETIME", "SELECT", "WITH"}
+    bad = {w for w in aliases + qualifiers if w.upper() in BQ_RESERVED and w.upper() not in types}
+    assert not bad, f"reserved words used as names: {sorted(bad)}"
