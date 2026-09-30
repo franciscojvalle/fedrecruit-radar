@@ -53,7 +53,14 @@ MODELS = [
     "marts/dim_vendors",
 ]
 SNAPSHOT_SCRIPTS = ["snapshot/snapshot_daily"]
-VIEWS = ["views/vw_award_events"]
+VIEWS = [
+    "views/vw_award_events",
+    # One flat view per dashboard page, so Looker Studio needs no blending.
+    "views/vw_dash_recompetes",
+    "views/vw_dash_market",
+    "views/vw_dash_wins",
+    "views/vw_dash_vendor_share",
+]
 
 _PLACEHOLDER = re.compile(r"\{\{\s*(ref|source|table)\(\s*'([A-Za-z0-9_]+)'\s*\)\s*\}\}")
 

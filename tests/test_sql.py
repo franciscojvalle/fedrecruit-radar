@@ -309,3 +309,32 @@ def test_no_reserved_words_as_names(path):
     types = {"STRING", "DATE", "INT64", "FLOAT64", "NUMERIC", "BOOL", "TIMESTAMP", "DATETIME", "SELECT", "WITH"}
     bad = {w for w in aliases + qualifiers if w.upper() in BQ_RESERVED and w.upper() not in types}
     assert not bad, f"reserved words used as names: {sorted(bad)}"
+
+
+def test_dashboard_views():
+    con = build_db()
+    for path in r.SNAPSHOT_SCRIPTS + r.VIEWS:      # same order as the real run
+        run_script(con, path)
+
+    rc = {x["award_id"]: x for x in rows(con, "SELECT * FROM vw_dash_recompetes")}
+    assert set(rc) == set(by_key(con, "recompetes", key="award_id"))
+    assert rc["A7"]["time_window"] == "Next 6 months" and rc["A1"]["time_window"] == "6-12 months"
+    month = rc["A1"]["expiry_month"]                  # BigQuery: DATE; DuckDB returns a timestamp
+    assert (month.date() if hasattr(month, "date") else month) == D(2027, 6, 1)
+    assert rc["A1"]["awarding_department"] == "Department of Defense"
+    assert rc["A7"]["set_aside_reported"] and not rc["A10"]["set_aside_reported"]
+
+    market = rows(con, "SELECT * FROM vw_dash_market")
+    assert {m["award_id"] for m in market} == {"A1", "A2", "A4"}        # X1 is out of the niche
+    assert sum(m["obligated_amount"] for m in market) == 60000 + 40000 + 100000 + 100000 - 5000
+    fy = {(m["award_id"], m["modification_number"]): m for m in market}
+    assert fy[("A1", "P00001")]["is_current_fy"]                          # FY2026 on 2026-09-28
+    assert not fy[("A1", "0")]["is_current_fy"]                           # FY2025
+
+    wins = rows(con, "SELECT * FROM vw_dash_wins")
+    assert len(wins) == len(by_key(con, "fact_awards"))
+
+    share = {v["recipient_uei"]: v for v in rows(con, "SELECT * FROM vw_dash_vendor_share")}
+    top = min(share.values(), key=lambda v: v["share_rank"])
+    assert top["share_rank"] == 1 and top["is_top5"]
+    assert sum(v["share_24m"] or 0 for v in share.values()) == pytest.approx(1.0)
