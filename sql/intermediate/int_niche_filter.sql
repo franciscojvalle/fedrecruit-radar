@@ -9,6 +9,8 @@
 -- Order matters: the first matching exclusion is the one reported.
 -- "Override" rules are skipped when the description clearly describes recruiting work
 -- (e.g. "EXECUTIVE SEARCH FIRM ... SYSTEM" stays in).
+-- v1 keeps facts only: no subtype tags (executive search / staffing / ...). Keyword tags were
+-- guesses; they return in v2 with review. Decision 2026-09-29 (Francisco).
 
 WITH base AS (
   SELECT
@@ -43,21 +45,7 @@ labelled AS (
       -- Bare order numbers with no description ("BPA CALL 0008"): can't tell what was bought.
       WHEN REGEXP_CONTAINS(d, r'^\s*(BPA\s+)?CALL\s*#?\s*\d+\s*$')
         THEN 'unlabeled_call'
-    END AS description_exclusion,
-
-    -- Subtype (Definitions, section 3). First match wins; default is staffing
-    -- (individual positions filled through a vendor, incl. personal services contracts).
-    CASE
-      WHEN REGEXP_CONTAINS(d, r'EXECUTIVE SEARCH|SEARCH FOR|\(SES\)|PRIVATE SECTOR LEADERSHIP|HEAD ?HUNT|SELECTION BOARD')
-        THEN 'executive_search'
-      WHEN REGEXP_CONTAINS(d, r'WARRIOR|YELLOW RIBBON|VETERAN')
-        THEN 'veteran_employment'
-      WHEN REGEXP_CONTAINS(d, r'RECRUIT|OUTREACH|HIRING|JOB FAIR|JOB POSTING|TALENT ACQUISITION')
-        THEN 'recruiting'
-      WHEN REGEXP_CONTAINS(d, r'HUMAN RESOURCE|\bHR\b|HUMAN CAPITAL|\bEEO\b|CLASSIFICATION')
-        THEN 'hr_support'
-      ELSE 'staffing'
-    END AS subtype
+    END AS description_exclusion
   FROM base
 )
 

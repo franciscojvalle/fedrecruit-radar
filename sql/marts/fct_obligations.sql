@@ -30,7 +30,6 @@ SELECT
   t.psc_code,
   t.transaction_description,
   COALESCE(n.in_niche, FALSE) AS in_niche,
-  n.subtype,
   t.as_of_date
 FROM {{ ref('stg_transactions') }} AS t
 LEFT JOIN {{ ref('int_niche_filter') }} AS n USING (award_key)

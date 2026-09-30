@@ -64,19 +64,12 @@ Override example: "EXECUTIVE SEARCH FIRM TO ASSIST THE CGA …" mentions a syste
 3. **Added** HR/recruiting software (Avue, HireEZ, Polihire, Salesforce) and AV/equipment work,
    found by reading every niche description.
 
-## 6. Subtype (`int_niche_filter`)
+## 6. No subtype tags in v1
 
-First match wins; default `staffing`.
-
-| Subtype | Matches | Example | Awards / $ |
-|---|---|---|---:|
-| `executive_search` | executive search, "search for", (SES), private sector leadership, headhunt, selection board | "SENIOR EXECUTIVE SEARCH (SES)" | 22 / $34.6M |
-| `veteran_employment` | warrior, yellow ribbon, veteran | "SFP: WORK FOR WARRIORS HAWAII" | 12 / $19.9M |
-| `recruiting` | recruit, outreach, hiring, job fair, job posting, talent acquisition | "TALENT ACQUISITION MANAGED SERVICES" | 59 / $33.4M |
-| `hr_support` | human resource, HR, human capital, EEO, classification | "EEO COUNSELING AND EEO INVESTIGATION" | 9 / $1.8M |
-| `staffing` | everything else: individual positions | "3 EXECUTIVE ASSISTANTS FOR OCE" | 112 / $41.3M |
-
-(Counts are over the 214 PSC-matched awards.) v2 replaces these keywords with LLM classification plus human review.
+Keyword tags (executive search / recruiting / staffing / HR / veteran programs) were built and
+dropped on 2026-09-29: they were guesses, and a hand check showed them mislabelling real contracts
+(e.g. Heidrick's $17.25M BOND leadership program tagged as a one-off search, while the PBGC CFO and
+Navy provost searches were missed). v1 publishes facts only; tags return in v2 with review.
 
 ## 7. Recompete status (`int_recompete_flags`)
 
@@ -99,26 +92,24 @@ A missed lead costs a user more than an extra one to skip, so the list follows e
 Right pairs always had similar descriptions; won/lost analysis comes back in v2 with description
 matching and review.
 
-### Recompete type and set-aside (from the award detail page)
+### Options and set-aside (from the award detail page)
 
 For every still-running award (61 on 2026-09-29) the ingest also reads USAspending's award detail
-page, which the search API doesn't expose: the final possible end date if every option is
-exercised, the ceiling value, the set-aside, how it was competed and how many bids came in.
+page, which the search API doesn't expose. These are published as facts; the reader judges what's
+a real opportunity.
 
 | Field | Rule | Example |
 |---|---|---|
-| `recompete_type = option_decision` | final possible end date more than 30 days after the current end date | `W912LA24P0011`, Army Work for Warriors: current end Oct 2026, can run to Oct 2029; ceiling $6.82M vs $2.73M obligated |
-| `recompete_type = one_off_search` | no options left and subtype is executive search: done when the role is filled | `16PBGC26F0005`, PBGC executive search for a CFO: ends Feb 2027, nothing to re-bid |
-| `recompete_type = likely_recompete` | no options left and the need is ongoing: the agency has to buy again | `77344424F0066`, DFC 3 LATAM contractors, $4.67M: ends Jul 2027, no options |
+| `potential_end_date` | last possible end date if every option is exercised | `W912LA24P0011`, Army Work for Warriors: current end Oct 2026, potential Oct 2029 |
+| `has_options_remaining` | `potential_end_date` more than 30 days after the current end date | same contract: yes. `16PBGC26F0005`, PBGC CFO search: no |
+| `ceiling_value` | value if every option is exercised | Army Work for Warriors: $6.82M ceiling vs $2.73M obligated |
 | `set_aside` | as reported; blank becomes "NOT REPORTED" | "8A COMPETED", "SMALL BUSINESS SET ASIDE - TOTAL"; 34 of 61 not reported (mostly orders under a parent contract) |
+| `number_of_offers_received`, `extent_competed` | as reported | Army Work for Warriors: 6 bids, "COMPETED UNDER SAP" |
 
-Why: in a hand check of 10 listed awards, 7 still had option years. Agencies usually extend
-rather than re-bid while options remain, so those are decision points to watch, not open bids.
-Of the other 3, two were one-off executive searches (PBGC CFO, Navy provost), which end when the
-role is filled rather than being re-bid. "Likely" because an agency can also bridge, award
-directly, or stop buying.
-The 30-day slack keeps a date that differs by a few days (e.g. Navy provost search: ends Sep 29,
-potential Sep 30) from counting as an option.
+Why it matters: in a hand check of 10 listed awards, 7 still had option years. Agencies usually
+extend rather than re-bid while options remain, so "ends in 3 months" means something different
+with and without options. The 30-day slack keeps a date that differs by a few days (e.g. Navy
+provost search: ends Sep 29, potential Sep 30) from counting as an option.
 
 ## 8. Money
 

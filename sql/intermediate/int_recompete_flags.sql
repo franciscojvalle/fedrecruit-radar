@@ -12,17 +12,11 @@
 -- more than an extra one to skip, so the list follows end dates. Won/lost analysis is v2, with
 -- description matching and review.
 --
--- Recompete type (only for awards in the 12-month window), first match wins:
---   option_decision   option years remain (final possible end date > 30 days after the current
---                     end date, from the award detail page): the agency will most likely extend.
---                     Worth watching, not bidding yet.
---   one_off_search    no options left and it's an executive search: the job ends when the role is
---                     filled, nothing gets re-bid. Shows which agencies use search firms.
---   likely_recompete  no options left and the need is ongoing (staffing, recruiting, HR, veteran
---                     programs): the agency has to buy again (new competition, bridge or direct
---                     award). This is the lead list.
--- Checked 2026-09-29 against 10 detail pages: 7 of 10 listed awards still had options; 2 of the
--- other 3 were one-off searches (PBGC CFO, Navy provost).
+-- Options (fact from the award detail page, no inference):
+--   has_options_remaining  final possible end date is more than 30 days after the current end
+--                          date, so the agency can extend without a new competition.
+-- v1 shows facts only. Labels such as "likely recompete" or "one-off search" were tried and
+-- dropped (2026-09-29): they mislabelled real contracts (e.g. Heidrick's $17.25M BOND program).
 
 WITH flagged AS (
   SELECT
@@ -46,12 +40,4 @@ WITH flagged AS (
   WHERE n.in_niche
 )
 
-SELECT
-  *,
-  CASE
-    WHEN status NOT IN ('expiring_6m', 'expiring_12m') THEN NULL
-    WHEN has_options_remaining                         THEN 'option_decision'
-    WHEN subtype = 'executive_search'                  THEN 'one_off_search'
-    ELSE 'likely_recompete'
-  END AS recompete_type
-FROM flagged
+SELECT * FROM flagged

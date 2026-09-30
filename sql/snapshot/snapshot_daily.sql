@@ -37,7 +37,7 @@ SELECT
   awarding_sub_agency,
   recipient_uei,
   recipient_name,
-  subtype,
+  CAST(NULL AS STRING) AS subtype,               -- reserved: subtype tags are v2
   award_amount,
   end_date,
   status,

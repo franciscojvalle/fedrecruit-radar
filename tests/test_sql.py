@@ -37,7 +37,7 @@ AWARDS = [
           uei="UEI000000007", name="VENDOR SEVEN", desc="FOREIGN SERVICE RECRUITMENT SERVICES"),
     # Ended 11 days ago, no successor yet -> expired_pending.
     award("A2", end=D(2026, 9, 17), start=D(2025, 4, 18)),
-    # Ended Jan 2025; A4 (same sub-agency + subtype, other vendor) awarded 1 month later -> recompeted.
+    # Ended Jan 2025; A4 (same sub-agency, other vendor) awarded 1 month later: A3 still just 'expired'.
     award("A3", end=D(2025, 1, 1), start=D(2023, 1, 1), sub="Army", uei="UEI00000000A", name="OLD INCUMBENT",
           desc="RECRUITING SERVICES"),
     award("A4", end=D(2028, 1, 31), start=D(2025, 2, 1), sub="Army", uei="UEI00000000B", name="NEW WINNER",
@@ -53,6 +53,12 @@ AWARDS = [
     # IGF:: label with recruiting work -> kept (the IGF:: prefix is not an exclusion).
     award("A11", desc="IGF::CT::IGF MARKETING AND RECRUITING SUPPORT SERVICES", uei="UEI000000011",
           name="VENDOR ELEVEN", sub="Army Reserve"),
+    # An executive-search program and a named-position staffing order: both plain leads in v1.
+    award("A12", desc="PRIVATE SECTOR LEADERSHIP BUSINESS OPERATORS PROGRAM SUPPORT", uei="UEI000000012",
+          name="VENDOR TWELVE", sub="Defense Office"),
+    # Staffing a named position (not a search): ongoing, stays a lead.
+    award("A13", desc="FUND THE POSITION OF DEPUTY PROGRAM OFFICER US PSC", uei="UEI000000013",
+          name="VENDOR THIRTEEN", sub="USAID Mission"),
     # Exclusions.
     award("X1", desc="LINKEDIN LICENSES AND JOB POSTINGS", uei="UEI0000000X1", name="LINKEDIN"),
     award("X2", desc="IGF::OT::IGF SALESFORCE IT SUPPORT", uei="UEI0000000X2", name="IT CO"),
@@ -97,6 +103,8 @@ DETAILS = [
     detail("A9", D(2027, 6, 30), D(2027, 7, 15)),     # 15 days of slack: not a real option
     detail("A10", D(2027, 6, 30), D(2027, 6, 30)),
     detail("A11", D(2027, 6, 30), D(2027, 6, 30)),
+    detail("A12", D(2027, 6, 30), D(2027, 6, 30)),
+    detail("A13", D(2027, 6, 30), D(2027, 6, 30)),
 ]
 
 
@@ -139,7 +147,7 @@ def by_key(con, table, key="award_key"):
 
 def test_staging_uses_latest_snapshot_only(db):
     stg = by_key(db, "stg_awards")
-    assert len(stg) == 15 - 1
+    assert len(stg) == 17 - 1
     assert stg["A1"]["award_amount"] == 100000.0
 
 
@@ -154,16 +162,15 @@ def test_niche_filter_reasons(db):
     assert n["A11"]["in_niche"]                                            # IGF:: is not an exclusion
 
 
-def test_subtypes(db):
-    n = by_key(db, "int_niche_filter")
-    assert n["A1"]["subtype"] == "executive_search"
-    assert n["A3"]["subtype"] == "recruiting"
-    assert n["A9"]["subtype"] == "staffing"
+def test_no_subtype_tags_in_v1(db):
+    # v1 is facts only: no keyword-guessed tags on the published tables.
+    assert "subtype" not in by_key(db, "fact_awards")["A1"]
+    assert "subtype" not in by_key(db, "recompetes")["A1"]
 
 
 def test_statuses_by_end_date_only(db):
     f = by_key(db, "fact_awards")
-    assert set(f) == {"A1", "A2", "A3", "A4", "A7", "A8", "A9", "A10", "A11"}
+    assert set(f) == {"A1", "A2", "A3", "A4", "A7", "A8", "A9", "A10", "A11", "A12", "A13"}
     assert f["A1"]["status"] == "expiring_12m"
     assert f["A7"]["status"] == "expiring_6m" and f["A7"]["in_act_now_window"]
     assert f["A2"]["status"] == "expired"
@@ -186,22 +193,21 @@ def test_annualized_value(db):
 
 def test_recompetes_list(db):
     rc = by_key(db, "recompetes")
-    assert set(rc) == {"A1", "A7", "A9", "A10", "A11"}
+    assert set(rc) == {"A1", "A7", "A9", "A10", "A11", "A12", "A13"}
     assert all(row["notice_out"] == "unknown" for row in rc.values())
 
 
-def test_recompete_type_from_options(db):
+def test_option_facts_from_detail_page(db):
     rc = by_key(db, "recompetes")
-    assert rc["A1"]["recompete_type"] == "option_decision"      # can run to 2029
+    assert rc["A1"]["has_options_remaining"]                     # can run to 2029
+    assert rc["A1"]["potential_end_date"] == D(2029, 6, 30)
     assert rc["A1"]["ceiling_value"] == 300000.0 and rc["A1"]["number_of_offers_received"] == 6
-    assert rc["A7"]["recompete_type"] == "likely_recompete"     # recruiting, no options left
-    assert rc["A9"]["recompete_type"] == "likely_recompete"     # 15 days of slack is not an option
-    assert rc["A10"]["recompete_type"] == "one_off_search"      # executive search, no options left
+    assert not rc["A7"]["has_options_remaining"]                 # no options left
+    assert not rc["A9"]["has_options_remaining"]                 # 15 days of slack is not an option
     assert rc["A7"]["set_aside"] == "SMALL BUSINESS SET ASIDE - TOTAL"
     assert rc["A10"]["set_aside"] == "NOT REPORTED"
-    f = by_key(db, "fact_awards")
-    assert f["A4"]["recompete_type"] is None                    # not in the window
-    assert f["A4"]["has_options_remaining"]
+    assert "recompete_type" not in rc["A1"]                      # no inferred labels in v1
+    assert by_key(db, "fact_awards")["A4"]["has_options_remaining"]
 
 
 def test_obligations(db):
@@ -257,23 +263,23 @@ def test_snapshot_is_idempotent_and_events_are_derived():
     con = build_db()
     run_script(con, "snapshot/snapshot_daily")                 # day 1
 
-    # Day 2: A1 extended, A7 amount changed, A2 gone, A12 new.
+    # Day 2: A1 extended, A7 amount changed, A2 gone, A99 new.
     con.execute("UPDATE fact_awards SET as_of_date = DATE '2026-09-29'")
     con.execute("UPDATE fact_awards SET end_date = DATE '2027-12-31', status = 'active' WHERE award_key = 'A1'")
     con.execute("UPDATE fact_awards SET award_amount = 150000 WHERE award_key = 'A7'")
     con.execute("DELETE FROM fact_awards WHERE award_key = 'A2'")
-    con.execute("INSERT INTO fact_awards SELECT * REPLACE ('A12' AS award_key, 'A12' AS award_id) "
+    con.execute("INSERT INTO fact_awards SELECT * REPLACE ('A99' AS award_key, 'A99' AS award_id) "
                 "FROM fact_awards WHERE award_key = 'A4'")
     run_script(con, "snapshot/snapshot_daily")                 # day 2
     run_script(con, "snapshot/snapshot_daily")                 # day 2 again: must not duplicate
 
     counts = dict(con.execute("SELECT snapshot_date, COUNT(*) FROM snapshot_daily GROUP BY 1").fetchall())
-    assert counts == {D(2026, 9, 28): 9, D(2026, 9, 29): 9}
+    assert counts == {D(2026, 9, 28): 11, D(2026, 9, 29): 11}
 
     run_script(con, "views/vw_award_events")
     events = {(k, e) for k, e in con.execute("SELECT award_key, event FROM vw_award_events").fetchall()}
     assert events == {("A1", "extended"), ("A1", "status_changed"), ("A7", "amount_changed"),
-                      ("A2", "dropped"), ("A12", "new")}
+                      ("A2", "dropped"), ("A99", "new")}
 
 
 # BigQuery reserved keywords (GoogleSQL). DuckDB accepts some of these as names, so the local run

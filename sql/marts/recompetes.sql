@@ -1,7 +1,7 @@
 -- recompetes: niche awards whose current period ends in the next 12 months.
 -- One row per award; the dashboard's Recompetes page and the weekly brief read this.
--- recompete_type (see int_recompete_flags): likely_recompete = the lead list;
--- option_decision = likely extension, watch; one_off_search = done when filled.
+-- has_options_remaining: the agency can extend to potential_end_date without a new competition.
+-- Facts only; the reader judges what's a real opportunity.
 -- set_aside tells a small firm whether it can bid at all ("NOT REPORTED" is common on orders
 -- under a larger contract, where the set-aside sits on the parent).
 -- notice_out stays 'unknown' until SAM.gov notices are ingested (Definitions, section 10).
@@ -13,9 +13,8 @@ SELECT
   awarding_sub_agency,
   recipient_name      AS incumbent_name,
   recipient_uei       AS incumbent_uei,
-  subtype,
   description,
-  recompete_type,
+  has_options_remaining,
   set_aside,
   extent_competed,
   number_of_offers_received,
