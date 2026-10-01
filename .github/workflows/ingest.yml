@@ -3,9 +3,14 @@ name: ingest
 # Daily: pull USAspending -> Cloud Storage + BigQuery raw tables -> build, test, publish the marts.
 # Failure alert: GitHub emails the person who last edited the schedule below when a scheduled run
 # fails (Settings -> Notifications -> Actions -> "Only notify for failed workflows" + Email).
+#
+# GitHub sometimes drops scheduled runs when it's busy. The two backup times below only do work
+# if no successful ingest has run yet today (UTC); otherwise they stop in a few seconds.
 on:
   schedule:
-    - cron: "17 13 * * *"   # 13:17 UTC every day = 6:17 AM Pacific (5:17 AM in winter)
+    - cron: "17 13 * * *"   # main run: 13:17 UTC = 6:17 AM Pacific (5:17 AM in winter)
+    - cron: "47 16 * * *"   # backup 1: 16:47 UTC = 9:47 AM Pacific, only if the main run didn't happen
+    - cron: "47 19 * * *"   # backup 2: 19:47 UTC = 12:47 PM Pacific, same rule
   workflow_dispatch:
     inputs:
       date:
@@ -14,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  actions: read     # lets the check job see today's earlier runs
   id-token: write   # lets the job request a GitHub OIDC token for Workload Identity
 
 concurrency:
@@ -21,7 +27,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+          REPO: ${{ github.repository }}
+          THIS_RUN: ${{ github.run_id }}
+        run: |
+          # Manual runs and the main 13:17 run always go ahead.
+          if [ "$EVENT" != "schedule" ] || [ "$CRON" = "17 13 * * *" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          today=$(date -u +%Y-%m-%d)
+          done_today=$(gh run list -R "$REPO" --workflow ingest.yml --status success \
+            --created ">=$today" --json databaseId --jq "[.[] | select(.databaseId != $THIS_RUN)] | length")
+          if [ "$done_today" -gt 0 ]; then
+            echo "Already ingested today ($done_today successful run(s)); backup skipped."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No successful ingest yet today; backup run goes ahead."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   ingest:
+    needs: check
+    if: needs.check.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
