@@ -2,4 +2,4 @@
 pytest==9.1.1
 # Local SQL tests: translate the BigQuery models to DuckDB and run them in memory.
 sqlglot==30.20.0
-duckdb==1.5.6
+duckdb==2.0.0
